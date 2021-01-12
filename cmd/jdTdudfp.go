@@ -32,17 +32,23 @@ func startJdTdudfp(cmd *cobra.Command, args []string) {
 	session := jd_seckill.NewSession(common.CookieJar)
 	err := session.CheckLoginStatus()
 	if err != nil {
-		log.Println("自动获取eid和fp失败，请重新登录")
+		log.Error("自动获取eid和fp失败，请重新登录")
 	} else {
-		log.Println("开始自动获取eid和fp，如遇卡住请结束进程，重新启动")
+		log.Warn("开始自动获取eid和fp，如遇卡住请结束进程，重新启动")
 		options := []chromedp.ExecAllocatorOption{
 			chromedp.Flag("headless", false),                       //debug使用
+			chromedp.Flag("mute-audio", true),                      //静音
 			chromedp.Flag("blink-settings", "imagesEnabled=false"), //禁用图片加载
 			chromedp.Flag("start-maximized", true),                 //最大化窗口
 			chromedp.Flag("no-sandbox", true),                      //禁用沙盒, 性能优先
-			chromedp.Flag("disable-setuid-sandbox", true),          //禁用setuid沙盒, 性能优先
 			chromedp.Flag("no-default-browser-check", true),        //不检查默认浏览器
-			chromedp.Flag("disable-plugins", true),                 //禁用扩展
+			chromedp.Flag("ignore-certificate-errors", true),       //忽略SSL证书错误
+			chromedp.Flag("disable-gpu", true),                     //禁用GPU加速
+			chromedp.Flag("no-first-run", true),                    //非首次运行
+			chromedp.Flag("disable-plugins", true),                 //禁用插件
+			chromedp.Flag("disable-extensions", false),             //禁用扩展
+			chromedp.Flag("disable-infobars", true),
+			chromedp.Flag("enable-automation", false),
 			chromedp.UserAgent(common.Config.MustValue("config", "default_user_agent", "")),
 		}
 		options = append(chromedp.DefaultExecAllocatorOptions[:], options...)
@@ -59,6 +65,14 @@ func startJdTdudfp(cmd *cobra.Command, args []string) {
 
 		//商品链接
 		good_url,_:=cmd.Flags().GetString("good_url")
+
+		//返回的eid和fp
+		returnEid:=""
+		returnFp:=""
+
+		//获取到的eid和fp
+		eid := ""
+		fp := ""
 
 		var res []byte
 		err = chromedp.Run(ctx,
@@ -88,37 +102,48 @@ func startJdTdudfp(cmd *cobra.Command, args []string) {
 			chromedp.Click(".common-submit-btn"),
 			chromedp.Sleep(3 * time.Second),
 			chromedp.Evaluate("_JdTdudfp", &res),
+			chromedp.Evaluate("_JdEid", &eid),
+			chromedp.Evaluate("_JdJrTdRiskFpInfo", &fp),
 		)
 		if err != nil {
-			log.Println("chromedp 出错了")
+			log.Error("chromedp 出错了")
 			log.Fatal(err)
 		}
 
 		value := string(res)
-		if !gjson.Valid(value) || gjson.Get(value, "eid").String() == "" || gjson.Get(value, "fp").String() == "" {
-			log.Println("获取失败，请重新尝试，返回信息:" + value)
-		} else {
-			eid := gjson.Get(value, "eid").String()
-			fp := gjson.Get(value, "fp").String()
-			log.Println("eid:" + eid)
-			log.Println("fp:" + fp)
+		//判断_JdTdudfp是否能获取到eid和fp，如果不能去获取_JdEid和_JdJrTdRiskFpInfo获取到的值
+		if gjson.Valid(value) && gjson.Get(value, "eid").String() != "" && gjson.Get(value, "fp").String() != "" {
+			returnEid = gjson.Get(value, "eid").String()
+			returnFp = gjson.Get(value, "fp").String()
+		}else{
+			if eid!="" && fp!=""{
+				returnEid=eid
+				returnFp=fp
+			}
+		}
+
+		//eid,fp合法性判断
+		if returnEid=="" || returnFp=="" {
+			log.Error("获取失败，请重新尝试，返回信息:" + value)
+		}else{
+			log.Println("eid:" + returnEid)
+			log.Println("fp:" + returnFp)
 
 			//修改配置文件
-			confFile := "./conf.ini"
+			confFile := common.SoftDir+"/conf.ini"
 			cfg, err := goconfig.LoadConfigFile(confFile)
 			if err != nil {
-				log.Println("配置文件不存在，程序退出")
+				log.Error("配置文件不存在，程序退出")
 				os.Exit(0)
 			}
 
-			cfg.SetValue("config", "eid", eid)
-			cfg.SetValue("config", "fp", fp)
+			cfg.SetValue("config", "eid", returnEid)
+			cfg.SetValue("config", "fp", returnFp)
 			if err := goconfig.SaveConfigFile(cfg, confFile); err != nil {
-				log.Println("保存配置文件失败，请手动填入配置文件")
+				log.Error("保存配置文件失败，请手动填入配置文件")
+			}else{
+				log.Println("eid, fp参数已经自动填入配置文件")
 			}
-
-			log.Println("eid, fp参数已经自动填入配置文件")
 		}
-
 	}
 }
